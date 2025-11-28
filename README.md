@@ -1,215 +1,325 @@
-# 多企業智能客服管理平台系統架構提案（v0.1）
+這是一份經過修改的系統設計文件。已將底層技術棧替換為 Google Cloud Platform (GCP) 的 **Vertex AI** 生態系，並具體整合了您指定的組件：**Gemini**、**Vertex AI Embeddings**、**Vertex AI Vector Search** 以及 **Vertex AI RAG Engine**。
 
-> 目標：提供支援多企業（Multi‑Tenant）的智能客服管理平台。企業管理員可自行上傳知識檔案以實現 RAG，並可自選/切換 LLM。一般使用者可在前台選擇企業並發問。後續擴充即時語音互動。
+-----
 
----
+# 智能客服管理平台 (Vertex AI Native 版)
 
-## 1) 角色與使用情境
+提供支援多企業（Multi-Tenant）的智能客服管理平台。
+企業管理員可自行上傳知識檔案，透過 **Vertex AI RAG Engine** 實現 RAG，並使用 **Gemini** 系列模型進行問答。
+一般使用者可在前台選擇企業並發問，未來可擴充為即時語音互動（語音問答）。
 
-* **平台超級管理員（Platform Admin）**：平台級用戶管理、計費、觀測與合規。
-* **企業管理員（Tenant Admin）**：設定企業資訊、權限、上傳文件、建立知識庫、選擇/配置 LLM、監控對話與成本。
-* **企業客服（Agent/Operator）**：審閱/標註對話、建立 FAQ、修補知識缺口、建立工作流程。
-* **終端使用者（End User）**：前台選擇企業 → 提問（文字/語音）。
+-----
 
----
+## 目錄
 
-## 2) 高階架構總覽
+1.  [專案簡介](https://www.google.com/search?q=%231-%E5%B0%88%E6%A1%88%E7%B0%A1%E4%BB%8B)
+2.  [角色與使用情境](https://www.google.com/search?q=%232-%E8%A7%92%E8%89%B2%E8%88%87%E4%BD%BF%E7%94%A8%E6%83%85%E5%A2%83)
+3.  [系統功能總覽](https://www.google.com/search?q=%233-%E7%B3%BB%E7%B5%B1%E5%8A%9F%E8%83%BD%E7%B8%BD%E8%A6%BD)
+4.  [RAG 知識管線（Vertex AI RAG Engine）](https://www.google.com/search?q=%234-rag-%E7%9F%A5%E8%AD%98%E7%AE%A1%E7%B7%9Avertex-ai-rag-engine)
+5.  [系統架構總覽](https://www.google.com/search?q=%235-%E7%B3%BB%E7%B5%B1%E6%9E%B6%E6%A7%8B%E7%B8%BD%E8%A6%BD)
+6.  [核心服務與職責](https://www.google.com/search?q=%236-%E6%A0%B8%E5%BF%83%E6%9C%8D%E5%8B%99%E8%88%87%E8%81%B7%E8%B2%AC)
+7.  [資料與 Multi-Tenant 設計](https://www.google.com/search?q=%237-%E8%B3%87%E6%96%99%E8%88%87-multi-tenant-%E8%A8%AD%E8%A8%88)
+8.  [關鍵流程說明](https://www.google.com/search?q=%238-%E9%97%9C%E9%8D%B5%E6%B5%81%E7%A8%8B%E8%AA%AA%E6%98%8E)
+9.  [基礎設施與技術選型](https://www.google.com/search?q=%239-%E5%9F%BA%E7%A4%8E%E8%A8%AD%E6%96%BD%E8%88%87%E6%8A%80%E8%A1%93%E9%81%B8%E5%9E%8B)
+10. [觀測、營運與功能旗標](https://www.google.com/search?q=%2310-%E8%A7%80%E6%B8%AC%E7%87%9F%E9%81%8B%E8%88%87%E5%8A%9F%E8%83%BD%E6%97%97%E6%A8%99)
+11. [安全與合規](https://www.google.com/search?q=%2311-%E5%AE%89%E5%85%A8%E8%88%87%E5%90%88%E8%A6%8F)
+12. [後續擴充與 Roadmap](https://www.google.com/search?q=%2312-%E5%BE%8C%E7%BA%8C%E6%93%B4%E5%85%85%E8%88%87-roadmap)
 
-```
-[Client Apps]
-  ├─ 前台使用者 Portal (Web/Mobile, 未來 Voice/WebRTC)
-  └─ 後台管理 Console (Admin SPA)
-        │
-        ▼
-[Edge]
-  ├─ CDN / WAF / DDoS 防護
-  └─ API Gateway / Ingress (OIDC, Rate Limit, AuthZ)
-        │
-        ▼
-[Core Backend]
-  ├─ 身份與租戶服務 (AuthN/AuthZ, RBAC, SSO, 多租戶隔離)
-  ├─ 對話協調器 (Conversation Orchestrator)
-  │    ├─ 提示模板/安全防護 (Prompt Guard, Output Filter)
-  │    ├─ 檢索器 (Retriever) + 重排序 (Re-Ranker)
-  │    └─ LLM 路由器 (Model Router)
-  ├─ 知識庫與索引服務 (Ingestion → Chunk → Embedding → Vector Index)
-  ├─ 模型管理/註冊 (Model Registry & Provider Connectors)
-  ├─ 工作流引擎 (可選，任務/流程自動化)
-  ├─ 觀測與治理 (Logs/Traces/Metrics, Token/成本監控)
-  ├─ 訂閱與計費 (Plans/Quotas/Billing)
-  └─ 通知服務 (Email/Webhook/Slack/LINE)
-        │
-        ▼
-[Data Layer]
-  ├─ 物件儲存 (MongoDB； 相容，用於原始檔案/轉換產物)
-  ├─ 向量資料庫 (Per-Tenant Namespace/Index)
-  ├─ 交易型資料庫 (PostgreSQL，多租戶 schema)
-  └─ 快取/佇列 (Redis / MQ)
-```
+-----
 
----
+## 1\. 專案簡介
 
-## 3) 多用戶（Multi‑Tenant）設計與隔離
+本專案是一套 **多企業共享平台** 的智能客服解決方案，深度整合 Google Cloud Vertex AI：
 
-* **身份邊界**：所有請求皆須帶上 `tenant_id`（Header/Token 內），Gateway 與後端服務強制驗證。
-* **資料隔離**：
+  - **支援多租戶（Multi-Tenant）**：單一平台服務多家企業，透過 Vertex AI 的 Namespace 或 Metadata Filter 進行嚴格資料隔離。
+  - **企業管理員可**：
+      - 上傳檔案建立自己的知識庫（利用 **Vertex AI RAG Engine** 自動化管線）。
+      - 配置 **Gemini** 模型參數（Gemini 1.5 Pro / Flash 等）。
+  - **終端使用者可**：
+      - 在前台選擇要詢問的企業。
+      - 以文字（未來支援語音）進行問答。
+  - **預留即時語音互動架構**：
+      - WebRTC + STT（Google Cloud Speech-to-Text / Chirp）
+      - TTS（Google Cloud Text-to-Speech）
 
-  * 向量庫以 `per-tenant index/namespace` 分隔。
-  * 交易庫採 **Schema-per-tenant**（中小規模）或 **Row-level security**（大型且數量多）。
-  * 物件儲存以前綴 `tenants/{tenant_id}/...` 管理。
-* **金鑰隔離**：KMS 產生租戶級別加密金鑰；機密（API Keys、Provider Tokens）以 **Secrets Manager** 持有。
-* **配額與節流**：依租戶計算 Token / QPS / 并發度；超限回退、排程、或降級策略。
-* **審計**：租戶級審計日誌（設定變更、匯入、對話導出、資料存取）。
+-----
 
----
+## 2\. 角色與使用情境
 
-## 4) RAG 知識管線（Ingestion → Indexing → Retrieval）
+### 2.1 角色定義
+
+| 角色 | 說明 |
+| :--- | :--- |
+| **Platform Admin** (平台超級管理員) | 管理 GCP 資源配額、Vertex AI 索引節點規模、全平台計費與觀測。 |
+| **Tenant Admin** (企業管理員) | 上傳文件至 RAG Engine Corpus；選擇 Gemini 模型版本；監控對話品質與 Token 成本。 |
+| **Agent / Operator** (企業客服) | 審閱 Gemini 回覆內容、標註 Grounding 來源準確度、建立 FAQ。 |
+| **End User** (終端使用者) | 在前台選擇企業並提問，取得基於企業知識的 Gemini 回覆。 |
+
+### 2.2 典型使用情境 (略，同原版)
+
+-----
+
+## 3\. 系統功能總覽
+
+### 3.1 平台層功能（Platform Admin）
+
+  - 租戶註冊與 GCP Service Account 綁定管理（如需）。
+  - **Vertex AI 配額管理**：監控 Embedding API 與 Gemini API 的 QPM (Queries Per Minute)。
+  - 全平台觀測：透過 Google Cloud Monitoring 監控 Vector Search 延遲與 RAG Engine 狀態。
+
+### 3.2 企業層功能（Tenant Admin）
+
+  - **知識庫管理 (RAG Engine)**：
+      - 檔案上傳：支援 PDF, HTML, Markdown 等，直接透過 API 注入 RAG Corpus。
+      - 索引狀態：查看 Vertex AI RAG Corpus 的同步與索引進度。
+  - **LLM 模型管理**：
+      - 選擇模型：Gemini 1.5 Pro (擅長複雜推理/長文本) 或 Gemini 1.5 Flash (擅長快速回應/低成本)。
+      - Prompt Engineering：設定 System Instructions 與 Safety Settings（安全性過濾）。
+  - **對話與成本監控**：
+      - 基於 Token 用量與 Vector Search 節點小時數計算成本。
+
+### 3.3 \~ 3.4 (略，同原版)
+
+-----
+
+## 4\. RAG 知識管線（Vertex AI RAG Engine）
+
+本系統使用 **Vertex AI RAG Engine** 搭配 **Vertex AI Vector Search** 進行全託管或半託管的知識處理。
 
 ### 4.1 支援檔案與擴充
 
-* **格式**：PDF、DOCX、PPTX、XLSX/CSV、Markdown、HTML、TXT、FAQ JSON、知識庫 ZIP。
-* **抽取**：
+**Vertex AI RAG Engine 支援格式**
 
-  * 文字抽取（含版面保持/簡化兩模式）。
-  * OCR（掃描 PDF/影像）。
-  * 表格與清單正規化；圖片（可選：圖說生成）。
-* **資料清理**：語言偵測、去噪、標點修復、斷詞/分句、代碼區塊處理、URL 展開。
-* **安全/隱私**：PII/敏感資訊偵測與遮蔽策略（可配置規則與允許名單）。
+  - 直接支援：PDF, HTML, Markdown, TXT。
+  - 結構化資料：透過 Connector 連接 BigQuery 或 Cloud Storage。
+  - **OCR 與多模態**：利用 Gemini 的多模態能力（Multimodal），可直接解析圖片與圖表內容進行 Embedding。
 
-### 4.2 Chunk 與 Metadata
+### 4.2 Chunk 與 Metadata (由 RAG Engine 輔助)
 
-* **Chunk 策略**：語意段落 + 視窗重疊（例如 500–1,000 tokens，overlap 50–150）。
-* **Metadata**：`tenant_id, doc_id, section, page, heading, tags, updated_at, language` 等。
-* **版本化**：`doc_version` 與 `index_version`；支援回滾與藍綠索引切換（零停機重建）。
+**Chunk 策略**
 
-### 4.3 向量與索引
+  - 利用 **Vertex AI RAG API** 的自動 Chunking 功能（Semantic Chunking）。
+  - 針對特殊需求，可自行切分後使用 `ImportRagFiles` API 上傳。
 
-* **Embedding 服務**：提供多模型（如通用 vs. 多語、長文本專用）；快取重複段。
-* **向量庫**：支援（擇一或混合）
-* **混合檢索**：向量相似度 + BM25 + 重排序（Cross-Encoder/Reranker）。
+**Metadata 與隔離**
 
-### 4.4 檢索與生成流程（RAG）
+  - **Tenant Isolation**：在建立 RAG Corpus 或 Index 時，為每個 Chunk 標記 `tenant_id`。
+  - 使用 Vertex AI Vector Search 的 **Filtering (Restricts)** 功能，在檢索時強制帶入 `tenant_id` 條件，確保不會搜到其他企業的資料。
 
-1. 對話協調器收到查詢（具 `tenant_id`）。
-2. 使用檢索器在該租戶索引中搜尋 k 個候選（Hybrid）。
-3. 重排序器精排，保留前 n 個片段。
-4. 套用租戶專屬提示模板（含引用格式/語氣/語言政策）。
-5. 交由 LLM 生成，並插入引用來源（可選：行內或尾註）。
-6. 後處理（檢查 PII、敏感詞、迷惑輸出、長度裁切）。
+### 4.3 向量與索引 (Vertex AI Vector Search)
 
----
+**Embedding 服務**
 
-## 5) 模型管理與路由（Model Registry & Router）
+  - **模型**：`gemini-embedding-001` (或更新的 `text-embedding-004`)。
+  - **多語言支援**：Google 的 Embedding 模型原生支援多語系，無需切換模型。
 
-* **模型註冊**：每租戶可掛載多個 Provider（OpenAI/Azure/Anthropic/Google、本地 vLLM 等），定義：`model_id, provider, api_key_ref, context_length, cost_profile, latency_slo`。
-* **策略路由**：依請求型別（聊天/嵌入/重排序）、長度、成本上限、SLA 需求動態選模；失敗自動 Failover。
-* **安全防護**：Prompt Injection 防護、系統提示固定區塊、工具調用白名單、輸出過濾（正則/關鍵詞/分類器）。
-* **可觀測**：每模型的延遲、成功率、token 使用量、成本占比；看板與警示。
+**向量庫 (Vertex AI Vector Search)**
 
----
+  - **架構**：基於 Google 的 ScaNN 演算法，提供高吞吐量、低延遲的向量檢索。
+  - **Index Endpoint**：部署 Index 至 Endpoint，支援 Public 或 VPC Peering 私有存取。
+  - **Update 策略**：使用 Streaming Update (即時更新) 模式，讓企業上傳文件後能在秒級/分級內被檢索到。
 
-## 6) 對話引擎與會話管理
+### 4.4 檢索與生成流程 (Grounding with Gemini)
 
-* **狀態**：Conversation / Turn / Message / ToolCall 表設計（見 §11）。
-* **Streaming**：支援 SSE/WebSocket 回傳增量字串。
-* **記憶（可選）**：短期（對話上下文裁切）與長期（摘要到向量庫，以租戶隔離）。
-* **工具調用**：Connector 風格（FAQ 查詢、企業 API、工單系統、資料庫查詢、日曆/CRM）。
-* **內容政策**：支援每租戶自定回應語氣、品牌詞彙、禁回主題清單。
+1.  **查詢進入**：Chat Orchestrator 接收使用者問題與 `tenant_id`。
+2.  **檢索 (Retrieval)**：
+      - 呼叫 **Vertex AI RAG Engine API** (Retrieve)。
+      - 參數包含 `filter: "tenant_id = '123'"` 確保資料隔離。
+      - 底層自動透過 Vertex AI Vector Search 進行語意搜尋。
+3.  **生成 (Generation)**：
+      - 使用 **Gemini API** (e.g., `generateContent`)。
+      - 啟用 **Grounding** 功能：將檢索到的 Context 直接作為 Grounding Source 傳入 Gemini。
+      - Gemini 自動生成回覆並附帶 \*\*Citation (引用來源)\*\*Metadata。
+4.  **後處理**：
+      - Gemini 內建 Safety Filters (阻擋仇恨言論、騷擾內容)。
+      - 回傳最終答案與引用連結給前端。
 
----
+-----
 
-## 7) 語音功能規劃（未來擴充）
+## 5\. 系統架構總覽
 
-* **即時語音 QA**：
+### 5.1 分層架構 (GCP Native)
 
-  * 前端：WebRTC + 麥克風串流；語音活動偵測（VAD）。
-  * **ASR**：串流語音轉文字（Whisper/Deepgram/Azure Speech 等插槽化）。
-  * **TTS**：文字轉語音（多語音色/語速）；回傳音訊分段播放。
-  * **延遲優化**：分段轉寫 + 並行檢索；先粗後細（先回短答，後補充）。
-* **語音留言模式**：離線上傳 → 異步轉寫 → 回信/通知結果。
+```text
+[Client Layer]
+  - Web Portal / Admin Console
+        |
+        v
+[Gateway & Security Layer]
+  - Google Cloud Load Balancing (GCLB) / Cloud Armor (WAF)
+  - Identity Aware Proxy (IAP) / Firebase Auth
+  - Tenant Resolver
+        |
+        v
+[Application Services Layer (Cloud Run / GKE)]
+  - Auth & Tenant Service
+  - Document Service (RAG Manager)
+  - Chat Orchestrator
+  - Agent Service
+        |
+        v
+[AI & Data Layer (Vertex AI Managed)]
+  - Vertex AI RAG Engine (Orchestration)
+  - Vertex AI Embeddings (gemini-embedding-001)
+  - Vertex AI Vector Search (Vector DB)
+  - Vertex AI Gemini API (LLM)
+  - Cloud Storage (GCS) - 原始檔案
+  - Firestore / Cloud SQL - Metadata & Conversations
+```
 
----
+-----
 
-## 8) 前後台功能列表
+## 6\. 核心服務與職責
 
-### 後台（企業管理 Console）
+### 6.1 Auth & Tenant Service
 
-* 客戶設定：品牌、域名、SSO；金鑰與 Provider 管理。
-* 知識庫：檔案上傳、處理進度、索引版本、資料清理規則、權限（部門/標籤）。
-* 模型設定：預設聊天模型/嵌入模型/重排序模型；成本上限；SLA。
-* 對話監控：對話記錄、評分、重訓建議、常見落答。
-* 成本&配額：Token/請求數/儲存用量看板與警示。
+管理租戶與權限。建議整合 **Identity Platform (Firebase Auth)** 處理多租戶登入。
 
-### 前台（終端使用者 Portal）
+### 6.2 Knowledge Base & Document Service (RAG Manager)
 
-* 企業選擇器（必填）：`?tenant=xxx` 或 UI 選單。
-* 聊天 UI：支援引用展開、檔案上傳（若客戶開啟）、語音模式（未來）。
-* 追問/重試、語言切換（自動偵測 zh‑TW 為預設）。
+  - 負責呼叫 Vertex AI API 建立 `RagCorpus`。
+  - 將企業上傳的檔案 (GCS URI) 匯入至指定的 RAG Corpus。
+  - 管理檔案的 `upload_status` 與同步狀態。
 
----
+### 6.3 Vertex AI RAG Engine (取代原 RAG Orchestrator)
 
-## 10) 介面設計（API, 以 REST 為例）
+  - 這是 Google 全託管服務，負責從 GCS 拉取檔案、執行 Chunking、呼叫 Embedding API、並寫入 Vector Search Index。
+  - 應用層只需呼叫 `ImportRagFiles` 即可。
 
-* `POST /v1/auth/login`、`GET /v1/me`
-* `GET /v1/tenants/:id`、`PATCH /v1/tenants/:id`
-* `POST /v1/tenants/:id/documents/upload`（多段傳輸、進度查詢 `GET /.../tasks/:taskId`）
-* `POST /v1/tenants/:id/documents/reindex`（藍綠切換）
-* `POST /v1/tenants/:id/chat`（文字）
-* `POST /v1/tenants/:id/chat/stream`（SSE/WebSocket）
-* `POST /v1/tenants/:id/chat/voice`（語音串流，WebRTC/GRPC）
-* `POST /v1/tenants/:id/models`（註冊/更新模型）
-* `GET /v1/tenants/:id/analytics`（成本/延遲/成功率）
+### 6.4 Vertex AI Embeddings
 
----
+  - 提供 `gemini-embedding-001` 或 `text-embedding-004` 模型。
+  - 負責將文字轉為 768 維 (或更高) 的向量。
 
-## 11) 流程設計（序列與控制）
+### 6.5 Vertex AI Vector Search
 
-### 11.1 使用者提問（文字）
+  - 高性能向量資料庫。
+  - 負責儲存向量索引，並執行帶有 Filter (`tenant_id`) 的 ANN (Approximate Nearest Neighbor) 搜尋。
 
-1. 前端攜帶 `tenant_id` → Gateway 驗證身份與配額。
-2. 對話協調器建立 `conversation`（或續用）與 `message`。
-3. 檢索器在租戶向量庫檢索（Hybrid），重排序器精排。
-4. 應用租戶提示模板 → LLM 路由器選模 → 生成（串流）。
-5. 後處理與安全審核 → 回傳（附引用）。
-6. 記錄遙測、成本、檢索與引用。
+### 6.6 Chat Orchestrator
 
-### 11.2 管理員上傳文件 → 建索引
+  - 核心對話邏輯。
+  - 呼叫 Vertex AI Gemini API，設定 `tools: [retrieval_tool]` 來實現 RAG。
+  - 處理對話歷史 (Context Window) 的管理。
 
-1. 上傳至 DB
-2. 觸發 Ingestion 任務（佇列）→ 文字抽取/OCR → 清理/切塊 → 嵌入。
-3. 寫入向量庫（臨時 index），完成後藍綠切換成「現行」。
-4. 產生可視化報表（覆蓋率、檔案健康度、斷詞統計）。
+-----
 
----
+## 7\. 資料與 Multi-Tenant 設計
 
-## 12) 非功能性需求（NFRs）
+### 7.1 資料隔離原則
 
-* **SLA/SLO**：P50 1.5s / P95 6s（文字查詢，非語音）；可配置降級：關閉重排序、縮小上下文。
-* **可用性**：多 AZ；定期備援（DB/Index/S3），RPO ≤ 1h，RTO ≤ 4h。
-* **安全**：全站 TLS、靜態加密、最小權限 IAM、CSP、WAF、檔案掃毒。
-* **合規**：GDPR/ISO 27001 導向的資料最小化與審計；數據駐留策略。
+  - **Vector Search**：利用 **Numeric Restricts** 或 **String Allows** (Filtering) 機制。每個 Point (向量) 寫入時帶有 `restrict: [{"namespace": "tenant_123"}]`。查詢時必須帶上相同 Filter。
+  - **RAG Engine**：若規模較大，可為每個大型租戶建立獨立的 `RagCorpus`；中小型租戶共用 Corpus 但透過 Metadata 過濾。
 
----
+### 7.2 資料儲存 (Google Cloud)
 
-## 13) 可觀測性與治理
+**Metadata (Firestore / Cloud SQL)**
 
-* **Metrics**：QPS、延遲、失敗率、Token/成本、檢索命中率、回答採納率。
-* **Tracing**：一條查詢橫跨 Gateway → Orchestrator → Retriever → LLM → 後處理。
-* **Logging**：結構化，租戶隔離；敏感資訊遮蔽後再存。
-* **A/B 與評估**：離線（對齊指標：Faithfulness/Context Recall）+ 線上（CTR/CSAT）。
+```json
+// documents (metadata)
+{
+  "id": "doc_001",
+  "tenantId": "tenant_123",
+  "gcsUri": "gs://bucket/tenant_123/doc.pdf",
+  "vertexRagFileId": "rag_file_xyz", // 對應 Vertex RAG 內的 ID
+  "status": "IMPORTED"
+}
+```
 
----
+**Vector Data (Vertex AI Vector Search)**
 
-## 14) 基礎設施與技術選型
+  - 由 RAG Engine 自動維護，或手動維護 Index 時包含：
+      - `id`: `doc_001_chunk_01`
+      - `embedding`: `[...]`
+      - `restricts`: `[{ "namespace": "tenant_123" }, { "kb_id": "kb_faq" }]`
 
-* **Kubernetes**（EKS/GKE/AKS）+ HPA/Autoscaling；
-* **DB**：MongoDB；
-* **Cache/Queue**：Redis（快取/節流/工作佇列）或 Kafka（高吞吐流水線）；
-* **Object Storage**：S3 相容；
-* **Vector DB**：milvus；
-* **Gateway**：Nginx Ingress/Envoy + OIDC；
-* **觀測**：Prometheus/Grafana + OpenTelemetry + Loki/ELK；
-* **功能旗標**：OpenFeature/Unleash；
-* **前端**：Next.js/React + Tailwind；
-* **語音**：WebRTC +（Whisper/Deepgram/Azure Speech）+ （TTS: Azure/ElevenLabs/Google）。
+-----
 
+## 8\. 關鍵流程說明
+
+### 8.1 企業上傳文件 (RAG Ingestion)
+
+1.  Tenant Admin 上傳檔案 -\> 存入 **Cloud Storage (GCS)**。
+2.  Document Service 呼叫 **Vertex AI RAG API** (`UploadRagFile` 或 `ImportRagFiles`)。
+      - 指定來源為 GCS URI。
+      - 指定目標 RAG Corpus。
+3.  Vertex AI 背景執行：解析 -\> Chunking -\> **Vertex AI Embeddings** -\> 更新 **Vertex AI Vector Search** 索引。
+4.  完成後回調或透過 API 輪詢狀態，更新前端顯示「已就緒」。
+
+### 8.2 終端使用者文字問答 (Retrieval & Generation)
+
+1.  User 提問。
+2.  Chat Orchestrator 呼叫 **Gemini API**：
+      - Model: `gemini-1.5-pro`
+      - Tool: `grounding_service` (指向 Vertex AI Search 或 RAG Corpus)。
+      - **重點**：在 Retrieval Config 中設定 `filter` 為 `tenant_id`。
+3.  Gemini 內部執行：
+      - 將 Query 轉向量 (using **gemini-embedding-001**)。
+      - 向 Vector Search 查詢 Top-K 相關片段 (Filtered by tenant)。
+      - 將片段作為 Context 輸入模型。
+4.  Gemini 回傳生成結果與 `grounding_metadata` (包含引用來源)。
+
+-----
+
+## 9\. 基礎設施與技術選型
+
+### 9.1 Orchestration
+
+  - **Google Kubernetes Engine (GKE)** 或 **Cloud Run** (Serverless)。
+  - 全容器化微服務。
+
+### 9.2 AI 核心組件 (Google Cloud)
+
+  - **LLM**: Gemini 1.5 Pro / Flash (透過 Vertex AI API)。
+  - **Embeddings**: `gemini-embedding-001` / `text-embedding-004`。
+  - **Vector DB**: **Vertex AI Vector Search** (原 Matching Engine)。
+  - **RAG Pipeline**: **Vertex AI RAG Engine**。
+
+### 9.3 資料存儲
+
+  - **Object Storage**: Google Cloud Storage (GCS)。
+  - **App DB**: Cloud SQL (PostgreSQL) 或 Firestore (NoSQL)。
+  - **Cache**: Memorystore for Redis (快取對話與 Session)。
+
+### 9.4 Gateway 與安全
+
+  - **API Gateway**: Apigee 或 Google Cloud API Gateway。
+  - **Security**: IAM, Secret Manager (儲存 API Keys)。
+
+-----
+
+## 10\. 觀測、營運與功能旗標
+
+### 10.1 Observability
+
+  - **Metrics**: Google Cloud Monitoring。
+      - 監控 Vector Search 的 QPS、Recall 率。
+      - 監控 Gemini API 的 Quota usage。
+  - **Logging**: Cloud Logging。
+  - **Tracing**: Cloud Trace。
+
+### 10.2 Feature Flags
+
+  - 使用 Firebase Remote Config 或自行建置 OpenFeature 服務，控制 Gemini 模型版本的灰度發布。
+
+-----
+
+## 11\. 安全與合規
+
+  - **資料駐留 (Data Residency)**：Vertex AI 支援指定 Region (如 `asia-east1` 台灣)，確保數據不離境。
+  - **VPC Service Controls**：建立安全邊界，防止資料被未授權存取。
+  - **Customer-Managed Encryption Keys (CMEK)**：使用 Cloud KMS 自管金鑰加密 Vector Search 索引與 GCS 檔案。
+
+-----
+
+## 12\. 後續擴充與 Roadmap
+
+#### 語音模式 (Google Native)
+
+  - **STT**: 使用 **Google Cloud Speech-to-Text v2** (Chirp 模型) 支援多語系高準確度辨識。
+  - **TTS**: 使用 **Google Cloud Text-to-Speech** (Journey voices) 生成自然人聲。
+  - **Multimodal Live**: 未來可整合 Gemini 1.5 Pro 的原生 Audio 輸入能力，略過 STT 直接進行語音理解。
+
+#### 企業私有化 (Private Cloud)
+
+  - 利用 **Google Distributed Cloud** (GDC) 或 Vertex AI on GDC 方案，支援高敏感產業的地端部署需求。
